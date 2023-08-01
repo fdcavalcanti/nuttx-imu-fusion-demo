@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "accelerometer.h"
+#include "imu.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -31,6 +31,10 @@
 
 #ifndef CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS
 #define CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS 10
+#endif
+
+#ifndef CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL
+#define CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL 131
 #endif
 
 #ifndef CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL
@@ -107,25 +111,29 @@ static int offload_task(int argc, FAR char *argv[]) {
   printf("Starting offload task\n");
   char msg_buffer[TCP_MSG_LEN];
   memset(msg_buffer, 0, sizeof(msg_buffer));
-  mqd_t acc_mqd = (mqd_t)*argv[1];
+  mqd_t imu_mqd = (mqd_t)*argv[1];
   int conn_fd = (int)*argv[2];
   int counter = 0;
-  struct accelerometer_msg rcv_acc_queue = {0};
+  struct imu_msg rcv_imu_queue = {0};
   printf("Transmission started\n");
 
   while (1) {
     int ret;
     if (client_listening) {
-      ret = mq_receive(acc_mqd, (char *)&rcv_acc_queue,
-                       sizeof(struct accelerometer_msg), 0);
+      ret = mq_receive(imu_mqd, (char *)&rcv_imu_queue,
+                       sizeof(struct imu_msg), 0);
       if (ret > 0) {
         counter++;
         snprintf(
-            msg_buffer, sizeof(msg_buffer), "{%d %.03f %.03f %.03f}\n",
+            msg_buffer, sizeof(msg_buffer), "{%d %.03f %.03f %.03f %.03f %.03f %.03f}\n",
             counter,
-            (float)rcv_acc_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
-            (float)rcv_acc_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
-            (float)rcv_acc_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL);
+            (float)rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
+            (float)rcv_imu_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
+            (float)rcv_imu_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
+            (float)rcv_imu_queue.gyro_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL,
+            (float)rcv_imu_queue.gyro_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL,
+            (float)rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL);
+
         ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
 
         if (ret <= 0) {
@@ -144,9 +152,9 @@ static int offload_task(int argc, FAR char *argv[]) {
   return 1;
 }
 
-static int accelerometer_task(int argc, FAR char *argv[]) {
-  printf("Starting accelerometer task\n");
-  struct accelerometer_msg acc_msg;
+static int imu_task(int argc, FAR char *argv[]) {
+  printf("Starting imu task\n");
+  struct imu_msg imu_data;
   mqd_t mqd = (mqd_t)*argv[1];
 
   fd = open("/dev/imu0", O_RDONLY);
@@ -165,8 +173,8 @@ static int accelerometer_task(int argc, FAR char *argv[]) {
   ioctl(fd, SNIOC_SET_AFS_SEL, 1);
 
   while (1) {
-    read_accelerometer(fd, &acc_msg);
-    int ret = mq_send(mqd, (const void *)&acc_msg, sizeof(acc_msg), 0);
+    read_imu(fd, &imu_data);
+    int ret = mq_send(mqd, (const void *)&imu_data, sizeof(imu_data), 0);
     if (ret < 0) {
       printf("Failed to send message\n");
     }
@@ -188,12 +196,12 @@ int main(int argc, FAR char *argv[]) {
   printf("Opening message queue channels\n");
   acc_attr.mq_flags = 0;
   acc_attr.mq_maxmsg = 2;
-  acc_attr.mq_msgsize = sizeof(struct accelerometer_msg);
+  acc_attr.mq_msgsize = sizeof(struct imu_msg);
   acc_attr.mq_curmsgs = 0;
 
-  acc_mqd = mq_open("Accelerometer Queue", O_RDWR | O_CREAT, 0666, &acc_attr);
+  acc_mqd = mq_open("IMU Queue", O_RDWR | O_CREAT, 0666, &acc_attr);
   if (acc_mqd == (mqd_t)-1) {
-    printf("Failed to start accelerometer queue\n");
+    printf("Failed to start IMU data queue\n");
     return 1;
   }
 
@@ -209,10 +217,10 @@ int main(int argc, FAR char *argv[]) {
   child_argv[2] = NULL;
 
   accelerometer_pid = task_create(
-      "Accelerometer Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
-      accelerometer_task, (char *const *)child_argv);
+      "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      imu_task, (char *const *)child_argv);
   if (accelerometer_pid < 0) {
-    printf("Failed to create accelerometer task\n");
+    printf("Failed to create IMU task\n");
   }
 
   offload_pid =

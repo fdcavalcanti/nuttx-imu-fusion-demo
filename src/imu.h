@@ -19,16 +19,20 @@
  * Public Data
  ****************************************************************************/
 
-struct accelerometer_msg {
+struct imu_msg {
   int16_t acc_x;
   int16_t acc_y;
   int16_t acc_z;
+  int16_t temp;
+  int16_t gyro_x;
+  int16_t gyro_y;
+  int16_t gyro_z;
 };
 
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
 
-void read_accelerometer(int fd, struct accelerometer_msg *acc_msg);
+void read_imu(int fd, struct imu_msg *imu_data);
 
 #endif  // APPLICATION_IMU_FUSION_DEMO_H
