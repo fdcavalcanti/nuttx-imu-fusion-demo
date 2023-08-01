@@ -1,0 +1,36 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+
+config APPLICATION_IMU_FUSION_DEMO
+    tristate "Fusion DEMO"
+    default n
+    ---help---
+        Enable IMU Fusion demo application
+
+if APPLICATION_IMU_FUSION_DEMO
+
+config APPLICATION_IMU_FUSION_DEMO_PROGNAME
+    string "Fusion Demo"
+    default "fusiondemo"
+    ---help---
+        This is the name of the program that will be used when the NSH ELF
+        program is installed.
+
+config APPLICATION_IMU_FUSION_DEMO_AFS_SEL
+    int "AFS_SEL for accelerometer"
+    default 4096
+
+config APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS
+    int "IMU sample rate in milliseconds"
+    default 10
+
+config APPLICATION_IMU_FUSION_DEMO_PRIORITY
+    int "Fusion demo application priority"
+    default 100
+
+config APPLICATION_IMU_FUSION_DEMO_STACKSIZE
+    int "Task stack size"
+    default DEFAULT_TASK_STACKSIZE
+
+endif
