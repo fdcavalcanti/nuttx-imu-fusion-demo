@@ -35,7 +35,7 @@
 #endif
 
 #ifndef CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL
-#define CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL 131
+#define CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL 65.5f
 #endif
 
 #ifndef CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL
@@ -59,6 +59,60 @@ static pid_t offload_pid;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+static int start_network_socket(void);
+static int offload_task(int argc, FAR char *argv[]);
+static int imu_task(int argc, FAR char *argv[]);
+
+/****************************************************************************
+ * main
+ ****************************************************************************/
+
+int main(int argc, FAR char *argv[]) {
+  printf("Starting Fusion Demo\n");
+  char *child_argv[3];
+  struct mq_attr acc_attr;
+  mqd_t acc_mqd;
+
+  printf("Opening message queue channels\n");
+  acc_attr.mq_flags = 0;
+  acc_attr.mq_maxmsg = 2;
+  acc_attr.mq_msgsize = sizeof(struct imu_msg);
+  acc_attr.mq_curmsgs = 0;
+
+  acc_mqd = mq_open("IMU Queue", O_RDWR | O_CREAT, 0666, &acc_attr);
+  if (acc_mqd == (mqd_t)-1) {
+    printf("Failed to start IMU data queue\n");
+    return 1;
+  }
+
+  int ret = start_network_socket();
+  if (ret < 0) {
+    printf("Failed to start socket\n");
+    mq_close(acc_mqd);
+    return 1;
+  }
+
+  child_argv[0] = (char *)&acc_mqd;
+  child_argv[1] = (char *)&client_tcp_fd;
+  child_argv[2] = NULL;
+
+  accelerometer_pid = task_create(
+      "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      imu_task, (char *const *)child_argv);
+  if (accelerometer_pid < 0) {
+    printf("Failed to create IMU task\n");
+  }
+
+  offload_pid =
+      task_create("Offload Task", 110, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+                  offload_task, (char *const *)child_argv);
+  if (offload_pid < 0) {
+    printf("Failed to create offload task\n");
+  }
+
+  return 0;
+}
+
 
 static int start_network_socket(void) {
   int len;
@@ -131,23 +185,29 @@ static int offload_task(int argc, FAR char *argv[]) {
                        sizeof(struct imu_msg), 0);
       if (ret > 0) {
         counter++;
-        imu_current.acc_x =  rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-        imu_current.acc_y =  rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-        imu_current.acc_z =  rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-        imu_current.gyro_x = rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-        imu_current.gyro_y = rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-        imu_current.gyro_z = rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+        imu_current.acc_x =  (float)rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+        imu_current.acc_y =  (float)rcv_imu_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+        imu_current.acc_z =  (float)rcv_imu_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+        imu_current.gyro_x = rcv_imu_queue.gyro_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+        imu_current.gyro_y = rcv_imu_queue.gyro_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+        imu_current.gyro_z = rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
 
         const FusionVector gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
         const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
         FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
         const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
-        printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+        // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+        printf("%f %f %f %f %f %f\n", imu_current.acc_x, imu_current.acc_y, imu_current.acc_z,
+               imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z);
 
-        snprintf(
-            msg_buffer, sizeof(msg_buffer), "{%d %.03f %.03f %.03f %.03f %.03f %.03f}\n",
-            counter, imu_current.acc_x, imu_current.acc_y, imu_current.acc_z, imu_current.gyro_x,
-            imu_current.gyro_y, imu_current.gyro_z);
+        // Write raw accelerometer and gyro values
+        // snprintf(
+        //     msg_buffer, sizeof(msg_buffer), "{%d %.03f %.03f %.03f %.03f %.03f %.03f}\n",
+        //     counter, imu_current.acc_x, imu_current.acc_y, imu_current.acc_z, imu_current.gyro_x,
+        //     imu_current.gyro_y, imu_current.gyro_z);
+
+        snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
+                 euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
 
         ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
 
@@ -195,55 +255,5 @@ static int imu_task(int argc, FAR char *argv[]) {
     }
     usleep(CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS*1000);
   }
-  return 0;
-}
-
-/****************************************************************************
- * main
- ****************************************************************************/
-
-int main(int argc, FAR char *argv[]) {
-  printf("Starting Fusion Demo\n");
-  char *child_argv[3];
-  struct mq_attr acc_attr;
-  mqd_t acc_mqd;
-
-  printf("Opening message queue channels\n");
-  acc_attr.mq_flags = 0;
-  acc_attr.mq_maxmsg = 2;
-  acc_attr.mq_msgsize = sizeof(struct imu_msg);
-  acc_attr.mq_curmsgs = 0;
-
-  acc_mqd = mq_open("IMU Queue", O_RDWR | O_CREAT, 0666, &acc_attr);
-  if (acc_mqd == (mqd_t)-1) {
-    printf("Failed to start IMU data queue\n");
-    return 1;
-  }
-
-  int ret = start_network_socket();
-  if (ret < 0) {
-    printf("Failed to start socket\n");
-    mq_close(acc_mqd);
-    return 1;
-  }
-
-  child_argv[0] = (char *)&acc_mqd;
-  child_argv[1] = (char *)&client_tcp_fd;
-  child_argv[2] = NULL;
-
-  accelerometer_pid = task_create(
-      "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
-      imu_task, (char *const *)child_argv);
-  if (accelerometer_pid < 0) {
-    printf("Failed to create IMU task\n");
-  }
-
-  offload_pid =
-      task_create("Offload Task", 110, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
-                  offload_task, (char *const *)child_argv);
-  if (offload_pid < 0) {
-    printf("Failed to create offload task\n");
-  }
-
   return 0;
 }
