@@ -29,6 +29,17 @@ struct imu_msg {
   int16_t gyro_z;
 };
 
+struct imu_msg_float {
+  float acc_x;
+  float acc_y;
+  float acc_z;
+  float temp;
+  float gyro_x;
+  float gyro_y;
+  float gyro_z;
+};
+
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/

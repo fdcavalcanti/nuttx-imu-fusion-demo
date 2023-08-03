@@ -5,8 +5,8 @@
  * needs to be included when using the library.
  */
 
-#ifndef FUSION_H
-#define FUSION_H
+#ifndef FUSION_FUSION_H
+#define FUSION_FUSION_H
 
 //------------------------------------------------------------------------------
 // Includes

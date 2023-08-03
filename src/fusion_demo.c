@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "imu.h"
+#include "Fusion/Fusion.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -115,6 +116,12 @@ static int offload_task(int argc, FAR char *argv[]) {
   int conn_fd = (int)*argv[2];
   int counter = 0;
   struct imu_msg rcv_imu_queue = {0};
+  struct imu_msg_float imu_current = {0};
+  
+  FusionAhrs ahrs;
+  FusionAhrsInitialise(&ahrs);
+  const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS / 1000.0;
+
   printf("Transmission started\n");
 
   while (1) {
@@ -124,15 +131,23 @@ static int offload_task(int argc, FAR char *argv[]) {
                        sizeof(struct imu_msg), 0);
       if (ret > 0) {
         counter++;
+        imu_current.acc_x =  rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+        imu_current.acc_y =  rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+        imu_current.acc_z =  rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+        imu_current.gyro_x = rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+        imu_current.gyro_y = rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+        imu_current.gyro_z = rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+
+        const FusionVector gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
+        const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
+        FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
+        const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
+        printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+
         snprintf(
             msg_buffer, sizeof(msg_buffer), "{%d %.03f %.03f %.03f %.03f %.03f %.03f}\n",
-            counter,
-            (float)rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
-            (float)rcv_imu_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
-            (float)rcv_imu_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL,
-            (float)rcv_imu_queue.gyro_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL,
-            (float)rcv_imu_queue.gyro_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL,
-            (float)rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL);
+            counter, imu_current.acc_x, imu_current.acc_y, imu_current.acc_z, imu_current.gyro_x,
+            imu_current.gyro_y, imu_current.gyro_z);
 
         ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
 
