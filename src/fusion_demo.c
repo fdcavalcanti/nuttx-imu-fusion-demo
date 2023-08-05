@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "imu.h"
+#include "sensor_ops.h"
 #include "Fusion/Fusion.h"
 
 /****************************************************************************

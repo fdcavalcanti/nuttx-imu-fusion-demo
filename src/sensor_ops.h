@@ -1,5 +1,5 @@
-#ifndef APPLICATION_IMU_FUSION_DEMO_H
-#define APPLICATION_IMU_FUSION_DEMO_H
+#ifndef SRC_SENSOR_OPS_H
+#define SRC_SENSOR_OPS_H
 /****************************************************************************
  * Included Files
  ****************************************************************************/
@@ -46,4 +46,4 @@ struct imu_msg_float {
 
 void read_imu(int fd, struct imu_msg *imu_data);
 
-#endif  // APPLICATION_IMU_FUSION_DEMO_H
+#endif  // SRC_SENSOR_OPS_H

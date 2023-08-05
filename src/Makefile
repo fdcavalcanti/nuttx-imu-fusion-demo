@@ -5,7 +5,7 @@ PRIORITY = $(CONFIG_APPLICATION_IMU_FUSION_DEMO_PRIORITY)
 STACKSIZE = $(CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE)
 MODULE = $(CONFIG_APPLICATION_IMU_FUSION_DEMO)
 
-CSRCS = imu.c Fusion/FusionCompass.c Fusion/FusionOffset.c Fusion/FusionAhrs.c
+CSRCS = sensor_ops.c Fusion/FusionCompass.c Fusion/FusionOffset.c Fusion/FusionAhrs.c
 MAINSRC = fusion_demo.c
 
 # CFLAGS += -I$(CURDIR)$(DELIM)Fusion

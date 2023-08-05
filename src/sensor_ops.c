@@ -1,4 +1,4 @@
-#include "imu.h"
+#include "sensor_ops.h"
 
 #include <stdio.h>
 
@@ -23,3 +23,4 @@ void read_imu(int fd, struct imu_msg *imu_data) {
                        ((raw_data[6] & REG_LOW_MASK) >> 8);
   }
 }
+
