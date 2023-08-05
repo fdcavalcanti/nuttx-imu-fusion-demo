@@ -3,6 +3,8 @@
  ****************************************************************************/
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <netdb.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <nuttx/config.h>
 #include <nuttx/mqueue.h>
@@ -16,6 +18,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <mqtt.h>
 
 #include "sensor_ops.h"
 #include "Fusion/Fusion.h"
@@ -43,6 +46,25 @@
 #endif
 
 /****************************************************************************
+ * Private Types
+ ****************************************************************************/
+
+struct mqttc_cfg_s
+{
+  struct mqtt_client client;
+  FAR const char *host;
+  FAR const char *port;
+  FAR const char *topic;
+  FAR const char *msg;
+  FAR const char *id;
+  uint8_t sendbuf[CONFIG_EXAMPLES_MQTTC_TXSIZE];
+  uint8_t recvbuf[CONFIG_EXAMPLES_MQTTC_RXSIZE];
+  uint32_t tmo;
+  uint8_t flags;
+  uint8_t qos;
+};
+
+/****************************************************************************
  * Private Data
  ****************************************************************************/
 
@@ -64,6 +86,9 @@ static int start_network_socket(void);
 static int offload_task(int argc, FAR char *argv[]);
 static int imu_task(int argc, FAR char *argv[]);
 static int sensor_ops_task(int argc, FAR char *argv[]);
+static FAR void *client_refresher(FAR void *data);
+static int initserver(FAR const struct mqttc_cfg_s *cfg);
+
 
 /****************************************************************************
  * main
@@ -74,8 +99,14 @@ int main(int argc, FAR char *argv[]) {
   char *child_argv[4];
   struct mq_attr acc_attr, sensor_ops_attr;
   mqd_t acc_mqd, sensor_ops_mqd;
+  int sockfd;
+  int timeout = 100;
+  enum MQTTErrors mqtterr;
+  pthread_t thrdid;
+  int n = 1;
 
   printf("Opening message queue channels\n");
+
   /* IMU Read Task message queue */
   acc_attr.mq_flags = 0;
   acc_attr.mq_maxmsg = 2;
@@ -100,18 +131,92 @@ int main(int argc, FAR char *argv[]) {
     return 1;
   }
 
-  // int ret = start_network_socket();
-  // if (ret < 0) {
-  //   printf("Failed to start socket\n");
-  //   mq_close(acc_mqd);
-  //   return 1;
-  // }
+  /* Start MQTT Publisher */
+  struct mqttc_cfg_s mqtt_cfg =
+    {
+      .host = "192.168.0.4",
+      .port = "5000",
+      .topic = "test",
+      .msg = "test",
+      .flags = MQTT_CONNECT_CLEAN_SESSION,
+      .tmo = 400,
+      .id = NULL,
+      .qos = MQTT_PUBLISH_QOS_0,
+    };
+
+  sockfd = initserver(&mqtt_cfg);
+  if (sockfd < 0)
+    {
+      printf("Failed to start network\n");
+      mq_close(acc_mqd);
+      mq_close(sensor_ops_mqd);
+      return -1;
+    }
+
+  mqtterr = mqtt_init(&mqtt_cfg.client, sockfd,
+                      mqtt_cfg.sendbuf, sizeof(mqtt_cfg.sendbuf),
+                      mqtt_cfg.recvbuf, sizeof(mqtt_cfg.recvbuf),
+                      NULL);
+  if (mqtterr != MQTT_OK)
+    {
+      printf("ERRPR! mqtt_init() failed.\n");
+      close(sockfd);
+      return -1;
+    }
+
+  mqtterr = mqtt_connect(&mqtt_cfg.client, mqtt_cfg.id,
+                         NULL, /* Will topic */
+                         NULL, /* Will message */
+                         0,    /* Will message size */
+                         NULL, /* User name */
+                         NULL, /* Password */
+                         mqtt_cfg.flags, mqtt_cfg.tmo);
+
+  if (mqtterr != MQTT_OK)
+    {
+      printf("ERROR! mqtt_connect() failed\n");
+      close(sockfd);
+      return -1;
+    }
+
+  if (mqtt_cfg.client.error != MQTT_OK)
+    {
+      printf("error: %s\n", mqtt_error_str(mqtt_cfg.client.error));
+      close(sockfd);
+      return -1;
+    }
+  else
+    {
+      printf("Success: Connected to broker!\n");
+    }
+
+  /* Start a thread to refresh the client (handle egress and ingree client
+   * traffic)
+   */
+
+  if (pthread_create(&thrdid, NULL, client_refresher, &mqtt_cfg.client))
+    {
+      printf("ERROR! pthread_create() failed.\n");
+      close(sockfd);
+      return -1;
+    }
+
+  while (!mqtt_cfg.client.event_connect && --timeout > 0)
+    {
+     usleep(10000);
+    }
+
+  if (timeout == 0)
+    {
+      pthread_cancel(thrdid);
+      return -1;
+    }
 
   child_argv[0] = (char *)&acc_mqd;
   child_argv[1] = (char *)&sensor_ops_mqd;
-  child_argv[2] = (char *)&client_tcp_fd;
-  child_argv[3] = NULL;
+  child_argv[2] = NULL;
 
+  /* Create tasks */
   accelerometer_pid = task_create(
       "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       imu_task, (char *const *)child_argv);
@@ -137,54 +242,6 @@ int main(int argc, FAR char *argv[]) {
 }
 
 
-static int start_network_socket(void) {
-  int len;
-  struct sockaddr_in server, client;
-
-  /* This condition ensures it is the first connection. */
-
-  if (socket_fd == 0) {
-    printf("Starting network\n");
-    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) {
-      printf("Failed to create TCP socket\n");
-      goto errout;
-    }
-
-    server.sin_family = AF_INET;
-    server.sin_addr.s_addr = htonl(INADDR_ANY);
-    server.sin_port = htons(PORT);
-
-    if (bind(socket_fd, (struct sockaddr *)&server, sizeof(server)) != 0) {
-      printf("TCP socket bind failed\n");
-      goto errout;
-    }
-
-    if ((listen(socket_fd, 5)) != 0) {
-      printf("Listen failed\n");
-      goto errout;
-    }
-  }
-
-  printf("Waiting for client\n");
-  len = sizeof(client);
-  client_tcp_fd =
-      accept(socket_fd, (struct sockaddr *)&client, (socklen_t *)&len);
-
-  if (client_tcp_fd < 0) {
-    printf("Failed to accept connection\n");
-    goto errout;
-  }
-
-  printf("Client connected: %s\n", inet_ntoa(client.sin_addr));
-  client_listening = true;
-  return OK;
-
-errout:
-  close(socket_fd);
-  return EXIT_FAILURE;
-}
-
 static int offload_task(int argc, FAR char *argv[]) {
   printf("Starting offload task.. ");
 
@@ -198,16 +255,6 @@ static int offload_task(int argc, FAR char *argv[]) {
     ret = mq_receive(mqd_offload, (char *) &euler, sizeof(euler), 0);
     if (ret > 0) {
       printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
-
-      // ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
-      // if (ret <= 0) {
-      //   printf("Client disconnected\n");
-      //   client_listening = false;
-      //   counter = 0;
-      //   close(client_tcp_fd);
-      //   start_network_socket();
-      // }
-      // memset(buffer, 0, sizeof(buffer));
     }
   }
 
@@ -299,4 +346,98 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
   }
 
   return 0;
+}
+
+/****************************************************************************
+ * Name: client_refresher
+ *
+ * Description:
+ *   The client's refresher. This function triggers back-end routines to
+ *   handle ingress/egress traffic to the broker.
+ *
+ ****************************************************************************/
+
+static FAR void *client_refresher(FAR void *data)
+{
+  while (1)
+    {
+      mqtt_sync((FAR struct mqtt_client *)data);
+      usleep(100000U);
+    }
+
+  return NULL;
+}
+
+/****************************************************************************
+ * Name: initserver
+ *
+ * Description:
+ *   Resolve server's name and try to establish a connection.
+ *
+ ****************************************************************************/
+
+static int initserver(FAR const struct mqttc_cfg_s *cfg)
+{
+  struct addrinfo hints;
+  FAR struct addrinfo *servinfo;
+  FAR struct addrinfo *itr;
+  int fd;
+  int ret;
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family  = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+
+  printf("Connecting to %s:%s...\n", cfg->host, cfg->port);
+
+  ret = getaddrinfo(cfg->host, cfg->port, &hints, &servinfo);
+  if (ret != OK)
+    {
+      printf("ERROR! getaddrinfo() failed: %s\n", gai_strerror(ret));
+      return -1;
+    }
+
+  itr = servinfo;
+  do
+    {
+      fd = socket(itr->ai_family, itr->ai_socktype, itr->ai_protocol);
+      if (fd < 0)
+        {
+          continue;
+        }
+
+      ret = connect(fd, itr->ai_addr, itr->ai_addrlen);
+      if (ret == 0)
+        {
+          break;
+        }
+
+      close(fd);
+      fd = -1;
+    }
+  while ((itr = itr->ai_next) != NULL);
+
+  freeaddrinfo(servinfo);
+
+  if (fd < 0)
+    {
+      printf("ERROR! Couldn't create socket\n");
+      return -1;
+    }
+
+  ret = fcntl(fd, F_GETFL, 0);
+  if (ret < 0)
+    {
+      printf("ERROR! fcntl() F_GETFL failed, errno: %d\n", errno);
+      return -1;
+    }
+
+  ret = fcntl(fd, F_SETFL, ret | O_NONBLOCK);
+  if (ret < 0)
+    {
+      printf("ERROR! fcntl() F_SETFL failed, errno: %d\n", errno);
+      return -1;
+    }
+
+  return fd;
 }
