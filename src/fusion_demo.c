@@ -228,11 +228,11 @@ static int offload_task(int argc, FAR char *argv[]) {
 }
 
 static int imu_task(int argc, FAR char *argv[]) {
-  printf("Starting imu task\n");
+  printf("Starting IMU task\n");
   struct imu_msg imu_data;
   mqd_t mqd = (mqd_t)*argv[1];
 
-  fd = open("/dev/imu0", O_RDONLY);
+  fd = open("/dev/imu0", O_RDWR);
   if (fd < 0) {
     printf("Failed to open IMU\n");
     return EXIT_FAILURE;
@@ -255,5 +255,58 @@ static int imu_task(int argc, FAR char *argv[]) {
     }
     usleep(CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS*1000);
   }
+  return 0;
+}
+
+
+static int sensor_ops_task(int argc, FAR char *argv[]) {
+  printf("Starting Sensor Ops task\n");
+
+  /* IMU data and message queue fd */
+  struct imu_msg rcv_imu_queue = {0};
+  struct imu_msg_float imu_current = {0};
+  mqd_t imu_mqd = (mqd_t)*argv[1];
+
+  /* Start FusionAhrs */
+  /* Calibration not available for now.*/
+  static FusionAhrs ahrs;
+  static FusionEuler euler;
+  static FusionVector gyroscope = {0.0f, 0.0f, 0.0f};
+  static FusionVector accelerometer = {0.0f, 0.0f, 1.0f};
+  FusionAhrsInitialise(&ahrs);
+
+  /* Output msg and utilities */
+  int ret;
+  char msg_buffer[100];
+  memset(msg_buffer, 0, sizeof(msg_buffer));
+  printf("Sensor Ops ready\n")
+
+  while (1) {
+    ret = mq_receive(imu_mqd, (char *) &rcv_imu_queue, sizeof(struct imu_msg), 0);
+
+    if (ret < 0) {
+      continue;
+    }
+
+    /* Convert accelerometer and gyro values */
+    imu_current.acc_x =  (float)rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+    imu_current.acc_y =  (float)rcv_imu_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+    imu_current.acc_z =  (float)rcv_imu_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+    imu_current.gyro_x = rcv_imu_queue.gyro_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+    imu_current.gyro_y = rcv_imu_queue.gyro_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+    imu_current.gyro_z = rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+
+    /* Apply received values to Fusion and calculate yaw, pitch and roll */
+    gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
+    accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
+    FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
+    euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
+
+    /* Send data to offload task */
+    snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
+             euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
+    memset(msg_buffer, 0, sizeof(msg_buffer));
+  }
+
   return 0;
 }
