@@ -146,7 +146,7 @@ int main(int argc, FAR char *argv[]) {
   }
 
   offload_pid = task_create(
-      "Offload Task", 100, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      "Offload Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       offload_task, (char *const *)child_argv);
   if (offload_pid < 0) {
     printf("Failed to create offload task\n");
@@ -157,7 +157,7 @@ int main(int argc, FAR char *argv[]) {
 
 
 static int offload_task(int argc, FAR char *argv[]) {
-  printf("Starting offload task.. ");
+  printf("Starting offload task.. \n");
 
   int ret;
   mqd_t mqd_offload = (mqd_t)* argv[2];
@@ -250,25 +250,27 @@ static int offload_task(int argc, FAR char *argv[]) {
       return -1;
     }
 
-  printf("done\n");
+  printf("Data offload starts\n");
 
   while (1) {
     ret = mq_receive(mqd_offload, (char *) &euler, sizeof(euler), 0);
+
     if (ret > 0) {
       snprintf(buffer, sizeof(buffer), "y%fyp%fpr%fr\n", 
                euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
       int mqtterr = mqtt_publish(&mqtt_cfg.client, mqtt_cfg.topic,
-                              buffer, strlen(buffer),
-                              mqtt_cfg.qos);
+                                 buffer, strlen(buffer),
+                                 mqtt_cfg.qos);
+
       if (mqtterr != MQTT_OK)
         {
           printf("ERROR! mqtt_publish() failed\n");
         }
 
-
-      printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+      // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
       memset(&buffer, 0, sizeof(buffer));
     }
+
   }
 
   return 1;
