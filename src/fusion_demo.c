@@ -24,7 +24,7 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define TCP_MSG_LEN 100
+#define MQTT_MSG_LEN 100
 #define SERIAL_OUTPUT false
 #define PORT 5000
 #define MAXLINE 1000
@@ -55,6 +55,7 @@ int fd, socket_fd, client_tcp_fd;
 
 static pid_t accelerometer_pid;
 static pid_t offload_pid;
+static pid_t sensor_ops_pid;
 
 /****************************************************************************
  * Private Functions
@@ -62,6 +63,7 @@ static pid_t offload_pid;
 static int start_network_socket(void);
 static int offload_task(int argc, FAR char *argv[]);
 static int imu_task(int argc, FAR char *argv[]);
+static int sensor_ops_task(int argc, FAR char *argv[]);
 
 /****************************************************************************
  * main
@@ -69,11 +71,12 @@ static int imu_task(int argc, FAR char *argv[]);
 
 int main(int argc, FAR char *argv[]) {
   printf("Starting Fusion Demo\n");
-  char *child_argv[3];
-  struct mq_attr acc_attr;
-  mqd_t acc_mqd;
+  char *child_argv[4];
+  struct mq_attr acc_attr, sensor_ops_attr;
+  mqd_t acc_mqd, sensor_ops_mqd;
 
   printf("Opening message queue channels\n");
+  /* IMU Read Task message queue */
   acc_attr.mq_flags = 0;
   acc_attr.mq_maxmsg = 2;
   acc_attr.mq_msgsize = sizeof(struct imu_msg);
@@ -85,16 +88,29 @@ int main(int argc, FAR char *argv[]) {
     return 1;
   }
 
-  int ret = start_network_socket();
-  if (ret < 0) {
-    printf("Failed to start socket\n");
-    mq_close(acc_mqd);
+  /* Sensor Ops Task message queue */
+  sensor_ops_attr.mq_flags = 0;
+  sensor_ops_attr.mq_maxmsg = 2;
+  sensor_ops_attr.mq_msgsize = sizeof(FusionEuler);
+  sensor_ops_attr.mq_curmsgs = 0;
+
+  sensor_ops_mqd = mq_open("Sensor Ops Queue", O_RDWR | O_CREAT, 0666, &sensor_ops_attr);
+  if (sensor_ops_mqd == (mqd_t)-1) {
+    printf("Failed to start Sensor Ops queue\n");
     return 1;
   }
 
+  // int ret = start_network_socket();
+  // if (ret < 0) {
+  //   printf("Failed to start socket\n");
+  //   mq_close(acc_mqd);
+  //   return 1;
+  // }
+
   child_argv[0] = (char *)&acc_mqd;
-  child_argv[1] = (char *)&client_tcp_fd;
-  child_argv[2] = NULL;
+  child_argv[1] = (char *)&sensor_ops_mqd;
+  child_argv[2] = (char *)&client_tcp_fd;
+  child_argv[3] = NULL;
 
   accelerometer_pid = task_create(
       "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
@@ -103,8 +119,15 @@ int main(int argc, FAR char *argv[]) {
     printf("Failed to create IMU task\n");
   }
 
+  sensor_ops_pid = task_create(
+      "Sensor Ops Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      sensor_ops_task, (char *const *)child_argv);
+  if (sensor_ops_pid < 0) {
+    printf("Failed to create Sensor Ops task\n");
+  }
+
   offload_pid =
-      task_create("Offload Task", 110, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      task_create("Offload Task", 100, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
                   offload_task, (char *const *)child_argv);
   if (offload_pid < 0) {
     printf("Failed to create offload task\n");
@@ -164,63 +187,27 @@ errout:
 
 static int offload_task(int argc, FAR char *argv[]) {
   printf("Starting offload task\n");
-  char msg_buffer[TCP_MSG_LEN];
-  memset(msg_buffer, 0, sizeof(msg_buffer));
-  mqd_t imu_mqd = (mqd_t)*argv[1];
-  int conn_fd = (int)*argv[2];
-  int counter = 0;
-  struct imu_msg rcv_imu_queue = {0};
-  struct imu_msg_float imu_current = {0};
-  
-  FusionAhrs ahrs;
-  FusionAhrsInitialise(&ahrs);
-  const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS / 1000.0;
 
-  printf("Transmission started\n");
+  int ret;
+  int counter = 0;
+  static char buffer[MQTT_MSG_LEN];
+  mqd_t sensor_ops_mqd = (mqd_t)*argv[2];
+
+  printf("Transmission starts\n");
 
   while (1) {
-    int ret;
-    if (client_listening) {
-      ret = mq_receive(imu_mqd, (char *)&rcv_imu_queue,
-                       sizeof(struct imu_msg), 0);
-      if (ret > 0) {
-        counter++;
-        imu_current.acc_x =  (float)rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-        imu_current.acc_y =  (float)rcv_imu_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-        imu_current.acc_z =  (float)rcv_imu_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-        imu_current.gyro_x = rcv_imu_queue.gyro_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-        imu_current.gyro_y = rcv_imu_queue.gyro_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-        imu_current.gyro_z = rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-
-        const FusionVector gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
-        const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
-        FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
-        const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
-        // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
-        printf("%f %f %f %f %f %f\n", imu_current.acc_x, imu_current.acc_y, imu_current.acc_z,
-               imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z);
-
-        // Write raw accelerometer and gyro values
-        // snprintf(
-        //     msg_buffer, sizeof(msg_buffer), "{%d %.03f %.03f %.03f %.03f %.03f %.03f}\n",
-        //     counter, imu_current.acc_x, imu_current.acc_y, imu_current.acc_z, imu_current.gyro_x,
-        //     imu_current.gyro_y, imu_current.gyro_z);
-
-        snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
-                 euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
-
-        ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
-
-        if (ret <= 0) {
-          printf("Client disconnected\n");
-          client_listening = false;
-          counter = 0;
-          close(client_tcp_fd);
-          start_network_socket();
-        }
-
-        memset(msg_buffer, 0, sizeof(msg_buffer));
-      }
+    ret = mq_receive(sensor_ops_mqd, (char *) &buffer, sizeof(buffer), 0);
+    if (ret > 0) {
+      printf("%s", buffer);
+      // ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
+      // if (ret <= 0) {
+      //   printf("Client disconnected\n");
+      //   client_listening = false;
+      //   counter = 0;
+      //   close(client_tcp_fd);
+      //   start_network_socket();
+      // }
+      memset(buffer, 0, sizeof(buffer));
     }
   }
 
@@ -229,12 +216,13 @@ static int offload_task(int argc, FAR char *argv[]) {
 
 static int imu_task(int argc, FAR char *argv[]) {
   printf("Starting IMU task\n");
+
   struct imu_msg imu_data;
-  mqd_t mqd = (mqd_t)*argv[1];
+  mqd_t mqd_imu = (mqd_t)*argv[1];
 
   fd = open("/dev/imu0", O_RDWR);
   if (fd < 0) {
-    printf("Failed to open IMU\n");
+    printf("ERROR Failed to open IMU\n");
     return EXIT_FAILURE;
   }
 
@@ -249,7 +237,7 @@ static int imu_task(int argc, FAR char *argv[]) {
 
   while (1) {
     read_imu(fd, &imu_data);
-    int ret = mq_send(mqd, (const void *)&imu_data, sizeof(imu_data), 0);
+    int ret = mq_send(mqd_imu, (const void *)&imu_data, sizeof(imu_data), 0);
     if (ret < 0) {
       printf("Failed to send message\n");
     }
@@ -258,33 +246,34 @@ static int imu_task(int argc, FAR char *argv[]) {
   return 0;
 }
 
-
 static int sensor_ops_task(int argc, FAR char *argv[]) {
   printf("Starting Sensor Ops task\n");
 
   /* IMU data and message queue fd */
   struct imu_msg rcv_imu_queue = {0};
   struct imu_msg_float imu_current = {0};
-  mqd_t imu_mqd = (mqd_t)*argv[1];
+  mqd_t mqd_imu = (mqd_t)*argv[1];
 
   /* Start FusionAhrs */
   /* Calibration not available for now.*/
   static FusionAhrs ahrs;
-  static FusionEuler euler;
-  static FusionVector gyroscope = {0.0f, 0.0f, 0.0f};
-  static FusionVector accelerometer = {0.0f, 0.0f, 1.0f};
+  // static FusionEuler euler;
+  // static FusionVector gyroscope = {0.0f, 0.0f, 0.0f};
+  // static FusionVector accelerometer = {0.0f, 0.0f, 1.0f};
   FusionAhrsInitialise(&ahrs);
 
   /* Output msg and utilities */
   int ret;
   char msg_buffer[100];
+  const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS * 1000.0f;
   memset(msg_buffer, 0, sizeof(msg_buffer));
-  printf("Sensor Ops ready\n")
+  printf("Sensor Ops ready\n");
 
   while (1) {
-    ret = mq_receive(imu_mqd, (char *) &rcv_imu_queue, sizeof(struct imu_msg), 0);
+    ret = mq_receive(mqd_imu, (char *) &rcv_imu_queue, sizeof(struct imu_msg), 0);
 
     if (ret < 0) {
+      printf("mq_receive imu_mqd ret: %d\n", ret);
       continue;
     }
 
@@ -297,10 +286,11 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
     imu_current.gyro_z = rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
 
     /* Apply received values to Fusion and calculate yaw, pitch and roll */
-    gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
-    accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
+    const FusionVector gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
+    const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
     FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
-    euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
+    const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
+    printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
 
     /* Send data to offload task */
     snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
