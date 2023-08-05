@@ -126,9 +126,9 @@ int main(int argc, FAR char *argv[]) {
     printf("Failed to create Sensor Ops task\n");
   }
 
-  offload_pid =
-      task_create("Offload Task", 100, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
-                  offload_task, (char *const *)child_argv);
+  offload_pid = task_create(
+      "Offload Task", 100, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      offload_task, (char *const *)child_argv);
   if (offload_pid < 0) {
     printf("Failed to create offload task\n");
   }
@@ -186,13 +186,13 @@ errout:
 }
 
 static int offload_task(int argc, FAR char *argv[]) {
-  printf("Starting offload task\n");
+  printf("Starting offload task.. ");
 
   int ret;
   mqd_t mqd_offload = (mqd_t)*argv[2];
   static FusionEuler euler;
 
-  printf("Transmission starts\n");
+  printf("done\n");
 
   while (1) {
     ret = mq_receive(mqd_offload, (char *) &euler, sizeof(euler), 0);
@@ -215,7 +215,7 @@ static int offload_task(int argc, FAR char *argv[]) {
 }
 
 static int imu_task(int argc, FAR char *argv[]) {
-  printf("Starting IMU task\n");
+  printf("Starting IMU task.. ");
 
   struct imu_msg imu_data;
   mqd_t mqd_imu = (mqd_t)*argv[1];
@@ -235,6 +235,8 @@ static int imu_task(int argc, FAR char *argv[]) {
 
   ioctl(fd, SNIOC_SET_AFS_SEL, 1);
 
+  printf("done\n");
+
   while (1) {
     read_imu(fd, &imu_data);
     int ret = mq_send(mqd_imu, (const void *) &imu_data, sizeof(imu_data), 0);
@@ -247,7 +249,7 @@ static int imu_task(int argc, FAR char *argv[]) {
 }
 
 static int sensor_ops_task(int argc, FAR char *argv[]) {
-  printf("Starting Sensor Ops task\n");
+  printf("Starting Sensor Ops task.. ");
 
   /* IMU data and message queue fd */
   struct imu_msg rcv_imu_queue = {0};
@@ -260,13 +262,11 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
   static FusionAhrs ahrs;
   FusionAhrsInitialise(&ahrs);
 
-  /* Output msg and utilities */
+  /* Utilities */
   int ret;
-  char msg_buffer[100];
   const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS * 1000.0f;
-  memset(msg_buffer, 0, sizeof(msg_buffer));
 
-  printf("Sensor Ops ready\n");
+  printf("done\n");
 
   while (1) {
     ret = mq_receive(mqd_imu, (char *) &rcv_imu_queue, sizeof(struct imu_msg), 0);
@@ -289,7 +289,6 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
     const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
     FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
-    // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
 
     /* Send data to offload task */
     ret = mq_send(mqd_offload, (const void *) &euler, sizeof(euler), 0);
@@ -297,9 +296,6 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
       printf("ERROR Failed to send data to offload task!\n");
     }
 
-    // snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
-    //          euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
-    // memset(msg_buffer, 0, sizeof(msg_buffer));
   }
 
   return 0;
