@@ -189,16 +189,16 @@ static int offload_task(int argc, FAR char *argv[]) {
   printf("Starting offload task\n");
 
   int ret;
-  int counter = 0;
-  static char buffer[MQTT_MSG_LEN];
-  mqd_t sensor_ops_mqd = (mqd_t)*argv[2];
+  mqd_t mqd_offload = (mqd_t)*argv[2];
+  static FusionEuler euler;
 
   printf("Transmission starts\n");
 
   while (1) {
-    ret = mq_receive(sensor_ops_mqd, (char *) &buffer, sizeof(buffer), 0);
+    ret = mq_receive(mqd_offload, (char *) &euler, sizeof(euler), 0);
     if (ret > 0) {
-      printf("%s", buffer);
+      printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+
       // ret = write(conn_fd, msg_buffer, sizeof(msg_buffer));
       // if (ret <= 0) {
       //   printf("Client disconnected\n");
@@ -207,7 +207,7 @@ static int offload_task(int argc, FAR char *argv[]) {
       //   close(client_tcp_fd);
       //   start_network_socket();
       // }
-      memset(buffer, 0, sizeof(buffer));
+      // memset(buffer, 0, sizeof(buffer));
     }
   }
 
@@ -237,7 +237,7 @@ static int imu_task(int argc, FAR char *argv[]) {
 
   while (1) {
     read_imu(fd, &imu_data);
-    int ret = mq_send(mqd_imu, (const void *)&imu_data, sizeof(imu_data), 0);
+    int ret = mq_send(mqd_imu, (const void *) &imu_data, sizeof(imu_data), 0);
     if (ret < 0) {
       printf("Failed to send message\n");
     }
@@ -253,13 +253,11 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
   struct imu_msg rcv_imu_queue = {0};
   struct imu_msg_float imu_current = {0};
   mqd_t mqd_imu = (mqd_t)*argv[1];
+  mqd_t mqd_offload = (mqd_t)*argv[2];
 
   /* Start FusionAhrs */
   /* Calibration not available for now.*/
   static FusionAhrs ahrs;
-  // static FusionEuler euler;
-  // static FusionVector gyroscope = {0.0f, 0.0f, 0.0f};
-  // static FusionVector accelerometer = {0.0f, 0.0f, 1.0f};
   FusionAhrsInitialise(&ahrs);
 
   /* Output msg and utilities */
@@ -267,6 +265,7 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
   char msg_buffer[100];
   const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS * 1000.0f;
   memset(msg_buffer, 0, sizeof(msg_buffer));
+
   printf("Sensor Ops ready\n");
 
   while (1) {
@@ -290,12 +289,17 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
     const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
     FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
-    printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+    // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
 
     /* Send data to offload task */
-    snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
-             euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
-    memset(msg_buffer, 0, sizeof(msg_buffer));
+    ret = mq_send(mqd_offload, (const void *) &euler, sizeof(euler), 0);
+    if (ret < 0) {
+      printf("ERROR Failed to send data to offload task!\n");
+    }
+
+    // snprintf(msg_buffer, sizeof(msg_buffer), "y%fyp%fpr%fr\n",
+    //          euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
+    // memset(msg_buffer, 0, sizeof(msg_buffer));
   }
 
   return 0;
