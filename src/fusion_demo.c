@@ -68,7 +68,6 @@ struct mqttc_cfg_s
  * Private Data
  ****************************************************************************/
 
-static bool client_listening;
 int fd, socket_fd, client_tcp_fd;
 
 /****************************************************************************
@@ -82,10 +81,11 @@ static pid_t sensor_ops_pid;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-static int start_network_socket(void);
+
 static int offload_task(int argc, FAR char *argv[]);
 static int imu_task(int argc, FAR char *argv[]);
 static int sensor_ops_task(int argc, FAR char *argv[]);
+/* MQTT Related */
 static FAR void *client_refresher(FAR void *data);
 static int initserver(FAR const struct mqttc_cfg_s *cfg);
 
@@ -109,10 +109,12 @@ int main(int argc, FAR char *argv[]) {
   acc_attr.mq_curmsgs = 0;
 
   acc_mqd = mq_open("IMU Queue", O_RDWR | O_CREAT, 0666, &acc_attr);
-  if (acc_mqd == (mqd_t)-1) {
-    printf("Failed to start IMU data queue\n");
-    return 1;
-  }
+
+  if (acc_mqd == (mqd_t)-1)
+    {
+      printf("Failed to start IMU data queue\n");
+      return 1;
+    }
 
   /* Sensor Ops Task message queue */
   sensor_ops_attr.mq_flags = 0;
@@ -121,10 +123,13 @@ int main(int argc, FAR char *argv[]) {
   sensor_ops_attr.mq_curmsgs = 0;
 
   sensor_ops_mqd = mq_open("Sensor Ops Queue", O_RDWR | O_CREAT, 0666, &sensor_ops_attr);
-  if (sensor_ops_mqd == (mqd_t)-1) {
-    printf("Failed to start Sensor Ops queue\n");
-    return 1;
-  } 
+
+  if (sensor_ops_mqd == (mqd_t)-1)
+    {
+      printf("Failed to start Sensor Ops queue\n");
+      mq_close(acc_mqd);
+      return 1;
+    } 
 
   child_argv[0] = (char *)&acc_mqd;
   child_argv[1] = (char *)&sensor_ops_mqd;
@@ -134,23 +139,29 @@ int main(int argc, FAR char *argv[]) {
   accelerometer_pid = task_create(
       "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       imu_task, (char *const *)child_argv);
-  if (accelerometer_pid < 0) {
-    printf("Failed to create IMU task\n");
-  }
+
+  if (accelerometer_pid < 0)
+    {
+      printf("Failed to create IMU task\n");
+    }
 
   sensor_ops_pid = task_create(
       "Sensor Ops Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       sensor_ops_task, (char *const *)child_argv);
-  if (sensor_ops_pid < 0) {
-    printf("Failed to create Sensor Ops task\n");
-  }
+
+  if (sensor_ops_pid < 0)
+    {
+      printf("Failed to create Sensor Ops task\n");
+    }
 
   offload_pid = task_create(
       "Offload Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       offload_task, (char *const *)child_argv);
-  if (offload_pid < 0) {
-    printf("Failed to create offload task\n");
-  }
+
+  if (offload_pid < 0)
+    {
+      printf("Failed to create Offload task\n");
+    }
 
   return 0;
 }
@@ -159,14 +170,14 @@ int main(int argc, FAR char *argv[]) {
 static int offload_task(int argc, FAR char *argv[]) {
   printf("Starting offload task.. \n");
 
+  int n = 1;
   int ret;
-  mqd_t mqd_offload = (mqd_t)* argv[2];
-  static FusionEuler euler;
   int sockfd;
   int timeout = 100;
-  enum MQTTErrors mqtterr;
   pthread_t thrdid;
-  int n = 1;
+  mqd_t mqd_offload = (mqd_t)* argv[2];
+  static FusionEuler euler;
+  enum MQTTErrors mqtterr;
   char buffer[MQTT_MSG_LEN];
   memset(&buffer, 0, sizeof(buffer));
 
@@ -176,8 +187,8 @@ static int offload_task(int argc, FAR char *argv[]) {
     {
       .host = "192.168.0.4",
       .port = "5000",
-      .topic = "test",
-      .msg = "test",
+      .topic = "imu_data",
+      .msg = "",
       .flags = MQTT_CONNECT_CLEAN_SESSION,
       .tmo = 400,
       .id = NULL,
@@ -225,7 +236,7 @@ static int offload_task(int argc, FAR char *argv[]) {
     }
   else
     {
-      printf("Success: Connected to broker!\n");
+      printf("Connected to broker\n");
     }
 
   /* Start a thread to refresh the client (handle egress and ingree client
@@ -234,7 +245,7 @@ static int offload_task(int argc, FAR char *argv[]) {
 
   if (pthread_create(&thrdid, NULL, client_refresher, &mqtt_cfg.client))
     {
-      printf("ERROR! pthread_create() failed.\n");
+      printf("ERROR pthread_create() failed.\n");
       close(sockfd);
       return -1;
     }
@@ -252,24 +263,26 @@ static int offload_task(int argc, FAR char *argv[]) {
 
   printf("Data offload starts\n");
 
-  while (1) {
-    ret = mq_receive(mqd_offload, (char *) &euler, sizeof(euler), 0);
+  while (1)
+    {
+      ret = mq_receive(mqd_offload, (char *) &euler, sizeof(euler), 0);
 
-    if (ret > 0) {
-      snprintf(buffer, sizeof(buffer), "y%fyp%fpr%fr\n", 
-               euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
-      int mqtterr = mqtt_publish(&mqtt_cfg.client, mqtt_cfg.topic,
-                                 buffer, strlen(buffer),
-                                 mqtt_cfg.qos);
-
-      if (mqtterr != MQTT_OK)
+      if (ret > 0) 
         {
-          printf("ERROR! mqtt_publish() failed\n");
-        }
+          snprintf(buffer, sizeof(buffer), "y%fyp%fpr%fr\n", 
+                   euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
+          int mqtterr = mqtt_publish(&mqtt_cfg.client, mqtt_cfg.topic,
+                                     buffer, strlen(buffer),
+                                     mqtt_cfg.qos);
 
-      // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
-      memset(&buffer, 0, sizeof(buffer));
-    }
+          if (mqtterr != MQTT_OK)
+            {
+              printf("ERROR! mqtt_publish() failed\n");
+            }
+          /* Use for debug on serial */  
+          // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+          memset(&buffer, 0, sizeof(buffer));
+        }
 
   }
 
