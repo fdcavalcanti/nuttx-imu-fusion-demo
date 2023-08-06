@@ -68,8 +68,6 @@ struct mqttc_cfg_s
  * Private Data
  ****************************************************************************/
 
-int fd, socket_fd, client_tcp_fd;
-
 /****************************************************************************
  * Public Data
  ****************************************************************************/
@@ -77,6 +75,7 @@ int fd, socket_fd, client_tcp_fd;
 static pid_t accelerometer_pid;
 static pid_t offload_pid;
 static pid_t sensor_ops_pid;
+static bool run;
 
 /****************************************************************************
  * Private Functions
@@ -99,6 +98,7 @@ int main(int argc, FAR char *argv[]) {
   char *child_argv[3];
   struct mq_attr acc_attr, sensor_ops_attr;
   mqd_t acc_mqd, sensor_ops_mqd;
+  run = false;
 
   printf("Opening message queue channels\n");
 
@@ -136,6 +136,30 @@ int main(int argc, FAR char *argv[]) {
   child_argv[2] = NULL;
 
   /* Create tasks */
+  offload_pid = task_create(
+      "Offload Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      offload_task, (char *const *)child_argv);
+
+  if (offload_pid < 0)
+    {
+      printf("Failed to create Offload task\n");
+    }
+
+  int counter = 0;
+  while(!run & (counter < 10))
+    {
+      usleep(1E6);
+      printf("Waiting for connection (%d)\r", counter);
+      counter++;
+    }
+
+  if (!run)
+    {
+      printf("\nExiting\n");
+      task_delete(offload_pid);
+      return -1;
+    }
+
   accelerometer_pid = task_create(
       "IMU Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       imu_task, (char *const *)child_argv);
@@ -146,21 +170,12 @@ int main(int argc, FAR char *argv[]) {
     }
 
   sensor_ops_pid = task_create(
-      "Sensor Ops Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
+      "Sensor Ops Task", 110, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
       sensor_ops_task, (char *const *)child_argv);
 
   if (sensor_ops_pid < 0)
     {
       printf("Failed to create Sensor Ops task\n");
-    }
-
-  offload_pid = task_create(
-      "Offload Task", 120, CONFIG_APPLICATION_IMU_FUSION_DEMO_STACKSIZE,
-      offload_task, (char *const *)child_argv);
-
-  if (offload_pid < 0)
-    {
-      printf("Failed to create Offload task\n");
     }
 
   return 0;
@@ -170,7 +185,6 @@ int main(int argc, FAR char *argv[]) {
 static int offload_task(int argc, FAR char *argv[]) {
   printf("Starting offload task.. \n");
 
-  int n = 1;
   int ret;
   int sockfd;
   int timeout = 100;
@@ -185,9 +199,9 @@ static int offload_task(int argc, FAR char *argv[]) {
 
  struct mqttc_cfg_s mqtt_cfg =
     {
-      .host = "192.168.0.4",
-      .port = "5000",
-      .topic = "imu_data",
+      .host = CONFIG_APPLICATION_IMU_FUSION_DEMO_MQTT_BROKER_IP,
+      .port = CONFIG_APPLICATION_IMU_FUSION_DEMO_MQTT_BROKER_PORT,
+      .topic = CONFIG_APPLICATION_IMU_FUSION_DEMO_MQTT_TOPIC,
       .msg = "",
       .flags = MQTT_CONNECT_CLEAN_SESSION,
       .tmo = 400,
@@ -237,6 +251,7 @@ static int offload_task(int argc, FAR char *argv[]) {
   else
     {
       printf("Connected to broker\n");
+      run = true;
     }
 
   /* Start a thread to refresh the client (handle egress and ingree client
@@ -271,9 +286,9 @@ static int offload_task(int argc, FAR char *argv[]) {
         {
           snprintf(buffer, sizeof(buffer), "y%fyp%fpr%fr\n", 
                    euler.angle.yaw, euler.angle.pitch, euler.angle.roll);
-          int mqtterr = mqtt_publish(&mqtt_cfg.client, mqtt_cfg.topic,
-                                     buffer, strlen(buffer),
-                                     mqtt_cfg.qos);
+          mqtterr = mqtt_publish(&mqtt_cfg.client, mqtt_cfg.topic,
+                                 buffer, strlen(buffer),
+                                 mqtt_cfg.qos);
 
           if (mqtterr != MQTT_OK)
             {
@@ -295,7 +310,7 @@ static int imu_task(int argc, FAR char *argv[]) {
   struct imu_msg imu_data;
   mqd_t mqd_imu = (mqd_t)*argv[1];
 
-  fd = open("/dev/imu0", O_RDWR);
+  int fd = open("/dev/imu0", O_RDWR);
   if (fd < 0) {
     printf("ERROR Failed to open IMU\n");
     return EXIT_FAILURE;
@@ -335,41 +350,48 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
   /* Start FusionAhrs */
   /* Calibration not available for now.*/
   static FusionAhrs ahrs;
+  // static FusionEuler euler;
   FusionAhrsInitialise(&ahrs);
 
   /* Utilities */
   int ret;
-  const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS * 1000.0f;
+  const float period = CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS / 1000.0f;
 
   printf("done\n");
 
   while (1) {
     ret = mq_receive(mqd_imu, (char *) &rcv_imu_queue, sizeof(struct imu_msg), 0);
 
-    if (ret < 0) {
-      printf("mq_receive imu_mqd ret: %d\n", ret);
-      continue;
-    }
+    if (ret < 0)
+      {
+        printf("mq_receive imu_mqd ret: %d\n", ret);
+        continue;
+      }
 
     /* Convert accelerometer and gyro values */
-    imu_current.acc_x =  (float)rcv_imu_queue.acc_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-    imu_current.acc_y =  (float)rcv_imu_queue.acc_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-    imu_current.acc_z =  (float)rcv_imu_queue.acc_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
-    imu_current.gyro_x = rcv_imu_queue.gyro_x / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-    imu_current.gyro_y = rcv_imu_queue.gyro_y / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
-    imu_current.gyro_z = rcv_imu_queue.gyro_z / CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+    imu_current.acc_x =  rcv_imu_queue.acc_x / (float)CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+    imu_current.acc_y =  rcv_imu_queue.acc_y / (float)CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+    imu_current.acc_z =  rcv_imu_queue.acc_z / (float)CONFIG_APPLICATION_IMU_FUSION_DEMO_AFS_SEL;
+    imu_current.gyro_x = rcv_imu_queue.gyro_x / (float)CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+    imu_current.gyro_y = rcv_imu_queue.gyro_y / (float)CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
+    imu_current.gyro_z = rcv_imu_queue.gyro_z / (float)CONFIG_APPLICATION_IMU_FUSION_DEMO_FS_SEL;
 
     /* Apply received values to Fusion and calculate yaw, pitch and roll */
-    const FusionVector gyroscope = {imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z};
-    const FusionVector accelerometer = {imu_current.acc_x, imu_current.acc_y, imu_current.acc_z};
+    const FusionVector gyroscope = {{imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z}};
+    const FusionVector accelerometer = {{imu_current.acc_x, imu_current.acc_y, imu_current.acc_z}};
     FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
 
+    printf("%f %f %f %f %f %f %f %f %f\n", imu_current.acc_x, imu_current.acc_y, 
+    imu_current.acc_z, imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z,
+    euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
     /* Send data to offload task */
-    ret = mq_send(mqd_offload, (const void *) &euler, sizeof(euler), 0);
-    if (ret < 0) {
-      printf("ERROR Failed to send data to offload task!\n");
-    }
+    ret = mq_send(mqd_offload, (const char *) &euler, sizeof(euler), 0);
+
+    if (ret < 0)
+      {
+        printf("ERROR Failed to send data to offload task!\n");
+      }
 
   }
 
@@ -416,7 +438,7 @@ static int initserver(FAR const struct mqttc_cfg_s *cfg)
   hints.ai_family  = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
 
-  printf("Connecting to %s:%s...\n", cfg->host, cfg->port);
+  printf("Connecting to %s:%s on topic %s...\n", cfg->host, cfg->port, cfg->topic);
 
   ret = getaddrinfo(cfg->host, cfg->port, &hints, &servinfo);
   if (ret != OK)
