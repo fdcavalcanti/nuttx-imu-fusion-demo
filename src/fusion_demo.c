@@ -28,10 +28,6 @@
  ****************************************************************************/
 
 #define MQTT_MSG_LEN 100
-#define SERIAL_OUTPUT false
-#define PORT 5000
-#define MAXLINE 1000
-#define BYTES_PER_MSG 14
 
 #ifndef CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS
 #define CONFIG_APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS 10
@@ -382,9 +378,11 @@ static int sensor_ops_task(int argc, FAR char *argv[]) {
     FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, period);
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
 
-    printf("%f %f %f %f %f %f %f %f %f\n", imu_current.acc_x, imu_current.acc_y, 
-    imu_current.acc_z, imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z,
-    euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+    /* Use for debug on data acquisition and processing */
+    // printf("%f %f %f %f %f %f %f %f %f\n", imu_current.acc_x, imu_current.acc_y, 
+    // imu_current.acc_z, imu_current.gyro_x, imu_current.gyro_y, imu_current.gyro_z,
+    // euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+
     /* Send data to offload task */
     ret = mq_send(mqd_offload, (const char *) &euler, sizeof(euler), 0);
 
