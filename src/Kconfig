@@ -18,12 +18,24 @@ config APPLICATION_IMU_FUSION_DEMO_PROGNAME
         program is installed.
 
 config APPLICATION_IMU_FUSION_DEMO_AFS_SEL
-    int "AFS_SEL for accelerometer"
-    default 4096
+    int "Accelerometer sensitivity (AFS_SEL)"
+    default 8192
 
 config APPLICATION_IMU_FUSION_DEMO_SAMPLE_RATE_MS
     int "IMU sample rate in milliseconds"
-    default 10
+    default 100
+
+config APPLICATION_IMU_FUSION_DEMO_MQTT_BROKER_IP
+    string "Broker IP address"
+    default "192.168.0.4"
+
+config APPLICATION_IMU_FUSION_DEMO_MQTT_BROKER_PORT
+    string "Broker port"
+    default 5000
+
+config APPLICATION_IMU_FUSION_DEMO_MQTT_TOPIC
+    string "Topic to connect on MQTT"
+    default "imu"
 
 config APPLICATION_IMU_FUSION_DEMO_PRIORITY
     int "Fusion demo application priority"
