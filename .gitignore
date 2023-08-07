@@ -53,3 +53,5 @@ dkms.conf
 .kconfig
 src/.depend
 src/Make.dep
+__pycache__/
+venv/
