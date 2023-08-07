@@ -6,5 +6,5 @@
 #
 
 menu "IMU Fusion Demo"
-source "/home/filipe/work/nuttx-imu-fusion-demo/src/Kconfig"
+source "/home/filipe/work/nuttx-imu-fusion-demo/nuttx/src/Kconfig"
 endmenu # IMU Fusion Demo

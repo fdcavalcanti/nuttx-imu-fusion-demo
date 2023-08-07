@@ -53,8 +53,8 @@ struct mqttc_cfg_s
   FAR const char *topic;
   FAR const char *msg;
   FAR const char *id;
-  uint8_t sendbuf[CONFIG_EXAMPLES_MQTTC_TXSIZE];
-  uint8_t recvbuf[CONFIG_EXAMPLES_MQTTC_RXSIZE];
+  uint8_t sendbuf[256];
+  uint8_t recvbuf[256];
   uint32_t tmo;
   uint8_t flags;
   uint8_t qos;
