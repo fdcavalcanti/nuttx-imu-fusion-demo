@@ -24,7 +24,7 @@ The important configuration options are:
 * Sample rate in milliseconds (defaults to 10 Hz)
 * MQTT Broker IP, port and topic
 
-<img src="https://github.com/fdcavalcanti/nuttx-imu-fusion-demo/blob/main/files/menuconfig.png" width="600" />
+<img src="https://github.com/fdcavalcanti/nuttx-imu-fusion-demo/blob/main/files/menuconfig.png" width="700" />
 
 On the computer side, the best option to run the 3D visualizer or the MQTT dump script is to create a Python virtual environment and install the required packages:
 ```bash
